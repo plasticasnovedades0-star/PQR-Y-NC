@@ -1,0 +1,30 @@
+{
+  "name": "gestion-nc",
+  "version": "1.0.0",
+  "description": "App web de gestion de novedades de producto no conforme con trazabilidad e indicadores",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "import-csv": "node scripts/import-csv.js",
+    "import-photos": "node scripts/import-photos.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^12.2.0",
+    "cookie-parser": "^1.4.7",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.1"
+  },
+  "devDependencies": {
+    "chart.js": "^4.4.7"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true
+  }
+}

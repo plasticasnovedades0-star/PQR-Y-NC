@@ -4,6 +4,7 @@ const { DATA_DIR, db } = require('../db');
 
 const CFG_FILE = path.join(DATA_DIR, 'elemental-config.json');
 const WO_CACHE = path.join(DATA_DIR, 'workorders-cache.json');
+const PRODUCTS_CACHE = path.join(DATA_DIR, 'products-cache.json');
 
 const DEFAULTS = {
   enabled: true,
@@ -309,6 +310,169 @@ async function lookupOf(orden, { refresh = false } = {}) {
   };
 }
 
+let prodCache = { at: 0, rows: null };
+
+async function loadProducts(cfg, { refresh = false } = {}) {
+  const ttl = (cfg.woTtlHours || 12) * 3600 * 1000;
+  if (!refresh && prodCache.rows && Date.now() - prodCache.at < ttl) return prodCache;
+
+  if (!refresh) {
+    try {
+      if (fs.existsSync(PRODUCTS_CACHE)) {
+        const st = fs.statSync(PRODUCTS_CACHE);
+        const raw = JSON.parse(fs.readFileSync(PRODUCTS_CACHE, 'utf8'));
+        if (Array.isArray(raw.rows) && raw.rows.length && Date.now() - st.mtimeMs < ttl * 4) {
+          prodCache = { at: st.mtimeMs, rows: raw.rows };
+          refreshProducts(cfg).catch(() => {});
+          return prodCache;
+        }
+      }
+    } catch (e) {
+      console.error('[elemental] Cache de productos ilegible:', e.message);
+    }
+  }
+  return await refreshProducts(cfg);
+}
+
+async function refreshProducts(cfg) {
+  const rows = await elemGet('/products', cfg, { $top: 20000 }, 120000);
+  if (!Array.isArray(rows) || !rows.length) throw new Error('Elemental devolvió una lista de productos vacía.');
+  prodCache = { at: Date.now(), rows };
+  try {
+    fs.writeFileSync(PRODUCTS_CACHE, JSON.stringify({ fetchedAt: new Date().toISOString(), rows }), 'utf8');
+  } catch (e) {
+    console.error('[elemental] No se pudo guardar cache de productos:', e.message);
+  }
+  return prodCache;
+}
+
+function baseCode(productId) {
+  return String(productId == null ? '' : productId).trim().split('-')[0].toUpperCase();
+}
+
+function buildProductMaps(products) {
+  const byId = new Map();
+  const idsByBase = new Map();
+  products.forEach((p) => {
+    if (!p || p.id == null) return;
+    byId.set(p.id, p);
+    const b = baseCode(p.productId);
+    if (!b) return;
+    if (!idsByBase.has(b)) idsByBase.set(b, new Set());
+    idsByBase.get(b).add(p.id);
+  });
+  return { byId, idsByBase };
+}
+
+function finishedByMonth(workRows, { desde, hasta, base } = {}) {
+  const { rows, products } = workRows;
+  const { byId, idsByBase } = buildProductMaps(products);
+  const targetIds = base ? idsByBase.get(String(base).toUpperCase()) : null;
+  const out = new Map();
+  const add = (mes, key, n) => {
+    if (!out.has(mes)) out.set(mes, { mes });
+    out.get(mes)[key] = (out.get(mes)[key] || 0) + n;
+  };
+  let sinProducto = 0;
+  let sinFecha = 0;
+  let ofsUsadas = 0;
+
+  rows.forEach((w) => {
+    if (w.workOrderType) return;
+    const fin = Number(w.finishedQty) || 0;
+    if (fin <= 0) return;
+    let p = byId.get(w.productId);
+    if (!p) {
+      const m = /\((\d{4,6})[^)]*\)/.exec(String(w.productName || ''));
+      if (m && idsByBase.has(m[1])) p = byId.get([...idsByBase.get(m[1])][0]);
+    }
+    const woBase = p ? baseCode(p.productId) : null;
+    if (!p) sinProducto++;
+    if (base && (!woBase || woBase !== String(base).toUpperCase())) return;
+    const mes = (w.startDate || '').slice(0, 7);
+    if (!mes) { sinFecha++; return; }
+    if (desde && mes < desde.slice(0, 7)) return;
+    if (hasta && mes > hasta.slice(0, 7)) return;
+    ofsUsadas++;
+    add(mes, 'unidades_terminadas', fin);
+    add(mes, 'ofs_terminadas', 1);
+  });
+
+  return { porMes: out, sinProducto, sinFecha, ofsUsadas };
+}
+
+async function unitsStats({ desde, hasta, base } = {}) {
+  const cfg = loadConfig();
+  const [wo, prods] = await Promise.all([
+    loadWorkOrders(cfg),
+    loadProducts(cfg),
+  ]);
+  const workRows = { rows: wo.rows, products: prods.rows };
+  const fin = finishedByMonth(workRows, { desde, hasta, base });
+
+  const where = [];
+  const params = [];
+  if (desde) { where.push('fecha_deteccion >= ?'); params.push(desde); }
+  if (hasta) { where.push('fecha_deteccion <= ?'); params.push(hasta); }
+
+  let repRows;
+  if (base) {
+    const b = String(base).toUpperCase();
+    const repWhere = ["UPPER(TRIM(referencia)) LIKE ?", ...where];
+    const repParams = [b + '%', ...params];
+    repRows = db.prepare(
+      'SELECT substr(fecha_deteccion,1,7) AS mes, COALESCE(SUM(cantidad),0) AS u, COUNT(*) AS n FROM reports WHERE ' +
+      repWhere.join(' AND ') + ' GROUP BY mes'
+    ).all(...repParams);
+  } else {
+    repRows = db.prepare(
+      'SELECT substr(fecha_deteccion,1,7) AS mes, COALESCE(SUM(cantidad),0) AS u, COUNT(*) AS n FROM reports' +
+      (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' GROUP BY mes'
+    ).all(...params);
+  }
+
+  const meses = new Set([...repRows.map((r) => r.mes), ...fin.porMes.keys()].filter(Boolean));
+  const desdeM = desde ? desde.slice(0, 7) : null;
+  const hastaM = hasta ? hasta.slice(0, 7) : null;
+  const lista = [...meses].filter((m) => m && (!desdeM || m >= desdeM) && (!hastaM || m <= hastaM)).sort();
+
+  const repMap = new Map(repRows.filter((r) => r.mes).map((r) => [r.mes, r]));
+  const filas = lista.map((mes) => {
+    const implicadas = Number(repMap.get(mes)?.u || 0);
+    const reportes = Number(repMap.get(mes)?.n || 0);
+    const terminadas = Number(fin.porMes.get(mes)?.unidades_terminadas || 0);
+    const ofs = Number(fin.porMes.get(mes)?.ofs_terminadas || 0);
+    return {
+      mes,
+      unidades_implicadas: implicadas,
+      reportes,
+      unidades_terminadas: terminadas,
+      ofs_terminadas: ofs,
+      pct: terminadas > 0 ? Math.round((implicadas / terminadas) * 10000) / 100 : null,
+    };
+  }).reverse();
+
+  const totImp = filas.reduce((a, f) => a + f.unidades_implicadas, 0);
+  const totTer = filas.reduce((a, f) => a + f.unidades_terminadas, 0);
+
+  return {
+    filas,
+    totales: {
+      unidades_implicadas: totImp,
+      unidades_terminadas: totTer,
+      pct: totTer > 0 ? Math.round((totImp / totTer) * 10000) / 100 : null,
+    },
+    nota: {
+      ofs_sin_producto_identificado: fin.sinProducto,
+      ofs_terminadas_sin_fecha_inicio: fin.sinFecha,
+      catalogo_productos: prods.rows.length,
+      ordenes_padres: wo.rows.filter((r) => !r.workOrderType).length,
+    },
+    fetchedAt: { ordenes: wo.at, productos: prodCache.at },
+  };
+}
+
 module.exports = {
   loadConfig, saveConfig, findOperario, searchOperarios, lookupOf, refreshWorkOrders,
+  loadProducts, refreshProducts, unitsStats,
 };

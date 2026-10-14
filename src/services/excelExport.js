@@ -78,7 +78,8 @@ async function buildExcel(query, user) {
   const imageIds = [];
   async function addPhotos(rowIdx, report) {
     const photos = db
-      .prepare('SELECT * FROM photos WHERE report_id = ? ORDER BY sort_order, id')
+      .prepare(`SELECT * FROM photos WHERE report_id = ?
+        ORDER BY CASE tipo WHEN 'TRATAMIENTO' THEN 1 ELSE 0 END, sort_order, id`)
       .all(report.id);
     let count = 0;
     for (const p of photos) {

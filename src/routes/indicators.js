@@ -1,9 +1,11 @@
 const express = require('express');
 const { db } = require('../db');
-const { requireAuth } = require('../auth');
+const { requireAuth, requireRole, requireApp } = require('../auth');
+const elemental = require('../services/elemental');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireApp('nc'));
 
 function buildFilters(q) {
   const where = [];
@@ -76,6 +78,43 @@ router.get('/', (req, res) => {
     por_mes: porMes,
     top_operarios: topOperarios,
   });
+});
+
+router.get('/unidades', async (req, res) => {
+  try {
+    const { desde, hasta, referencia } = req.query;
+    const stats = await elemental.unitsStats({
+      desde: desde || null,
+      hasta: hasta || null,
+      base: referencia ? String(referencia).trim().split('-')[0] : null,
+    });
+    res.json(stats);
+  } catch (e) {
+    console.error('[indicators:unidades]', e);
+    res.status(500).json({ error: `Error calculando unidades: ${e.message}` });
+  }
+});
+
+router.get('/unidades/referencias', async (req, res) => {
+  try {
+    const refs = db.prepare(
+      "SELECT TRIM(referencia) AS referencia, COUNT(*) AS n, COALESCE(SUM(cantidad),0) AS unidades FROM reports WHERE TRIM(referencia) <> '' GROUP BY TRIM(referencia) ORDER BY referencia"
+    ).all();
+    res.json({ items: refs });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/unidades/refresh', requireRole('gestion'), async (req, res) => {
+  try {
+    const cfg = elemental.loadConfig();
+    await elemental.refreshWorkOrders(cfg);
+    await elemental.refreshProducts(cfg);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: `Error refrescando datos de Elemental: ${e.message}` });
+  }
 });
 
 module.exports = { router, buildFilters };

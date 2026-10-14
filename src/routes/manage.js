@@ -153,48 +153,108 @@ router.get('/lookups', requireRole('gestion'), (req, res) => {
   res.json({ items: rows });
 });
 
-router.get('/users', requireRole('gestion'), (req, res) => {
+router.get('/users', (req, res) => {
+  const soloReporte = req.user.role !== 'gestion';
+  const app = req.user.app || 'nc';
   const rows = db
-    .prepare('SELECT id, username, full_name, role, active, created_at FROM users ORDER BY username')
-    .all();
-  res.json({ items: rows });
+    .prepare(
+      `SELECT id, username, full_name, role, active, pending, app, created_at FROM users
+       WHERE app = ? ${soloReporte ? "AND role = 'reporte'" : ''}
+       ORDER BY pending DESC, username`
+    )
+    .all(app);
+  res.json({
+    items: rows,
+    pendientes: rows.filter((u) => u.pending).length,
+    app,
+    area: soloReporte ? 'reporte' : 'gestion',
+  });
 });
 
-router.post('/users', requireRole('gestion'), (req, res) => {
+router.post('/users', (req, res) => {
+  const esGestion = req.user.role === 'gestion';
   const { username, password, full_name, role } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
   if (String(password).length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
-  if (!['reporte', 'gestion'].includes(role)) return res.status(400).json({ error: 'Rol inválido (reporte o gestion)' });
+  if (esGestion && role === 'reporte') {
+    return res.status(400).json({ error: 'Los usuarios de Reporte se crean en el área de Reporte (Novedades → Usuarios).' });
+  }
+  if (!esGestion && role === 'gestion') {
+    return res.status(403).json({ error: 'Solo un usuario de Gestión activo puede crear cuentas de Gestión.' });
+  }
+  const nuevoRol = esGestion ? 'gestion' : 'reporte';
+  const app = req.user.app || 'nc';
+  const existe = db.prepare('SELECT id FROM users WHERE app = ? AND username = ? COLLATE NOCASE').get(app, String(username).trim());
+  if (existe) return res.status(400).json({ error: 'El usuario ya existe en este módulo' });
+  const pendiente = esGestion ? 0 : 1;
   try {
-    db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?, ?, ?, ?)').run(
+    db.prepare('INSERT INTO users (username, password_hash, full_name, role, active, pending, app) VALUES (?, ?, ?, ?, 1, ?, ?)').run(
       String(username).trim(),
       bcrypt.hashSync(password, 10),
       String(full_name || '').trim(),
-      role
+      nuevoRol,
+      pendiente,
+      app
     );
-    res.status(201).json({ ok: true });
+    res.status(201).json({
+      ok: true,
+      role: nuevoRol,
+      pending: pendiente,
+      mensaje: pendiente
+        ? 'Cuenta creada. Un usuario de Gestión debe aprobarla antes de que pueda ingresar.'
+        : 'Usuario de Gestión creado y aprobado.',
+    });
   } catch (e) {
     res.status(400).json({ error: e.message.includes('UNIQUE') ? 'El usuario ya existe' : e.message });
   }
 });
 
-router.put('/users/:id', requireRole('gestion'), (req, res) => {
-  const { full_name, role, active, password } = req.body || {};
+router.delete('/users/:id', requireRole('gestion'), (req, res) => {
+  const app = req.user.app || 'nc';
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
-  if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+  if (!user || user.app !== app) return res.status(404).json({ error: 'Usuario no encontrado' });
+  if (user.id === req.user.id) return res.status(400).json({ error: 'No puede eliminar su propio usuario.' });
+  if (user.role === 'gestion') {
+    const n = db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'gestion' AND active = 1 AND app = ?").get(app).n;
+    if (n <= 1) return res.status(400).json({ error: 'Debe existir al menos un usuario activo de gestión en este módulo.' });
+  }
+  db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
+  res.json({ ok: true });
+});
+
+router.put('/users/:id', requireRole('gestion'), (req, res) => {
+  const { full_name, role, active, password, pending } = req.body || {};
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!user || user.app !== (req.user.app || 'nc')) return res.status(404).json({ error: 'Usuario no encontrado' });
   if (role && !['reporte', 'gestion'].includes(role)) return res.status(400).json({ error: 'Rol inválido' });
   if (active === false && user.id === req.user.id) return res.status(400).json({ error: 'No puede desactivarse a sí mismo' });
+  if (pending === 0 && user.pending) {
+    db.prepare('UPDATE users SET pending = 0 WHERE id = ?').run(user.id);
+  }
   if (password) {
     if (String(password).length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
     db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(password, 10), user.id);
   }
-  db.prepare('UPDATE users SET full_name = ?, role = ?, active = ? WHERE id = ?').run(
+  db.prepare('UPDATE users SET full_name = ?, role = ?, active = ?, pending = ? WHERE id = ?').run(
     full_name !== undefined ? String(full_name).trim() : user.full_name,
     role || user.role,
     active !== undefined ? (active ? 1 : 0) : user.active,
+    pending !== undefined ? (pending ? 1 : 0) : user.pending,
     user.id
   );
   res.json({ ok: true });
+});
+
+router.get('/access-log', requireRole('gestion'), (req, res) => {
+  const app = req.user.app || 'nc';
+  const items = db.prepare(`
+    SELECT id, username, operator, role, ip, app, created_at
+    FROM access_log WHERE app = ? ORDER BY id DESC LIMIT 150`).all(app);
+  const resumen = db.prepare(`
+    SELECT username, operator, COUNT(*) AS accesos, MAX(created_at) AS ultimo
+    FROM access_log WHERE app = ? GROUP BY username, operator
+    ORDER BY MAX(created_at) DESC LIMIT 50`).all(app);
+  res.json({ items, resumen, app });
 });
 
 module.exports = { router };

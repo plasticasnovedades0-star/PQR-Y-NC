@@ -1,9 +1,10 @@
 const express = require('express');
-const { requireAuth } = require('../auth');
+const { requireAuth, requireApp } = require('../auth');
 const { buildExcel } = require('../services/excelExport');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireApp('nc'));
 
 router.get('/excel', async (req, res) => {
   try {

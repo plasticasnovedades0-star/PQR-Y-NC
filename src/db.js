@@ -85,9 +85,19 @@ CREATE TABLE IF NOT EXISTS catalog (
   PRIMARY KEY (clave, valor)
 );
 
+CREATE TABLE IF NOT EXISTS access_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL,
+  operator TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT '',
+  ip TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_reports_estado ON reports(estado);
 CREATE INDEX IF NOT EXISTS idx_reports_fecha ON reports(fecha_deteccion);
-CREATE INDEX IF NOT EXISTS idx_photos_report ON photos(report_id);
+CREATE INDEX IF NOT EXISTS idx_photos_tipo ON photos(report_id, tipo);
+CREATE INDEX IF NOT EXISTS idx_access_log ON access_log(created_at);
 `);
 
 const reportCols = db.prepare('PRAGMA table_info(reports)').all().map((c) => c.name);
@@ -96,6 +106,45 @@ if (!reportCols.includes('color_parte_error')) {
 }
 if (!reportCols.includes('otra_referencia')) {
   db.exec("ALTER TABLE reports ADD COLUMN otra_referencia TEXT NOT NULL DEFAULT ''");
+}
+
+const photoCols = db.prepare('PRAGMA table_info(photos)').all().map((c) => c.name);
+if (!photoCols.includes('tipo')) {
+  db.exec("ALTER TABLE photos ADD COLUMN tipo TEXT NOT NULL DEFAULT 'EVIDENCIA'");
+}
+db.exec("CREATE INDEX IF NOT EXISTS idx_photos_tipo ON photos(report_id, tipo)");
+
+const userCols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+if (!userCols.includes('pending')) {
+  db.exec('ALTER TABLE users ADD COLUMN pending INTEGER NOT NULL DEFAULT 0');
+}
+if (!userCols.includes('app')) {
+  db.exec(`
+    CREATE TABLE users_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL COLLATE NOCASE,
+      password_hash TEXT NOT NULL,
+      full_name TEXT NOT NULL DEFAULT '',
+      role TEXT NOT NULL CHECK (role IN ('reporte','gestion')),
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      pending INTEGER NOT NULL DEFAULT 0,
+      app TEXT NOT NULL DEFAULT 'nc',
+      UNIQUE (app, username)
+    );
+    INSERT INTO users_new (id, username, password_hash, full_name, role, active, created_at, pending, app)
+      SELECT id, username, password_hash, full_name, role, active, created_at, COALESCE(pending, 0), 'nc' FROM users;
+    DROP TABLE users;
+    ALTER TABLE users_new RENAME TO users;
+  `);
+}
+db.exec('UPDATE users SET pending = 0 WHERE pending IS NULL');
+db.exec("UPDATE users SET app = 'nc' WHERE app IS NULL OR app = ''");
+db.exec('CREATE INDEX IF NOT EXISTS idx_users_app ON users(app, username)');
+
+const logCols = db.prepare('PRAGMA table_info(access_log)').all().map((c) => c.name);
+if (!logCols.includes('app')) {
+  db.exec("ALTER TABLE access_log ADD COLUMN app TEXT NOT NULL DEFAULT 'nc'");
 }
 
 const TIPOS = [

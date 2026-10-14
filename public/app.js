@@ -5,10 +5,21 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const app = $('#app');
 
+let MODULE = 'nc';
+const tokenKey = (m) => (m === 'pqr' ? 'pqr_token' : 'nc_token');
 let TOKEN = localStorage.getItem('nc_token') || '';
 let USER = null;
 let META = { tipos: [], areas: [], turnos: [], estados: ['ABIERTO', 'EN PROCESO', 'CERRADO'], max_photos: 10 };
 let charts = [];
+
+function setToken(t, m = MODULE) {
+  TOKEN = t;
+  if (t) localStorage.setItem(tokenKey(m), t);
+  else localStorage.removeItem(tokenKey(m));
+}
+function loadToken(m = MODULE) {
+  TOKEN = localStorage.getItem(tokenKey(m)) || '';
+}
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -47,8 +58,8 @@ async function api(path, opts = {}) {
   }
   const res = await fetch(path, { ...opts, headers, credentials: 'same-origin' });
   if (res.status === 401) {
-    TOKEN = ''; localStorage.removeItem('nc_token'); USER = null;
-    location.hash = '#/login';
+    setToken(''); USER = null;
+    location.hash = MODULE === 'pqr' ? '#/pqr' : '#/login';
     throw new Error('Sesión expirada. Inicie sesión de nuevo.');
   }
   if (opts.raw) {
@@ -60,44 +71,253 @@ async function api(path, opts = {}) {
   return data;
 }
 
-/* ============ LOGIN ============ */
-function renderLogin() {
+/* ============ PORTADA (elegir módulo) ============ */
+function renderHome() {
   app.innerHTML = `
-  <div class="login-wrap">
-    <div class="login-box">
+  <div class="home-wrap">
+    <div class="home-box">
       <div class="logo-lg">NC</div>
-      <h1>Gestión de Producto No Conforme</h1>
-      <p class="sub">Novedades · Trazabilidad · Indicadores</p>
-      <form id="login-form">
-        <label class="field"><span>Usuario</span>
-          <input type="text" id="lg-user" autocomplete="username" required autofocus />
-        </label>
-        <label class="field"><span>Contraseña</span>
-          <input type="password" id="lg-pass" autocomplete="current-password" required />
-        </label>
-        <button class="btn block" type="submit">Ingresar</button>
-      </form>
-      <div class="login-hint">
-        <b>Roles:</b><br/>
-        · <b>reporte</b> — crea y da seguimiento a novedades<br/>
-        · <b>gestion</b> — todo + cierres, usuarios, catálogos, API e indicadores<br/>
-        <span class="muted">Usuarios iniciales: gestion / Gestion2026 · reporte / Reporte2026</span>
+      <h1>Seleccione un módulo</h1>
+      <p class="sub">Gestión de planta · Elemental</p>
+      <div class="home-btns">
+        <a class="home-btn pqr" href="#/pqr">
+          <span class="hb-ico">📋</span>
+          <span class="hb-t">PQR</span>
+          <span class="hb-s">Peticiones, quejas y reclamos de clientes</span>
+        </a>
+        <a class="home-btn nc" href="#/login">
+          <span class="hb-ico">⚠️</span>
+          <span class="hb-t">NC</span>
+          <span class="hb-s">Producto no conforme · Novedades</span>
+        </a>
       </div>
     </div>
   </div>`;
-  $('#login-form').onsubmit = async (e) => {
-    e.preventDefault();
-    try {
-      const r = await api('/api/auth/login', {
-        method: 'POST',
-        body: { username: $('#lg-user').value.trim(), password: $('#lg-pass').value },
-      });
-      TOKEN = r.token; localStorage.setItem('nc_token', r.token); USER = r.user;
-      toast('Bienvenido, ' + (r.user.name || r.user.username));
-      location.hash = '#/novedades';
-      route();
-    } catch (err) { toast(err.message, 'err'); }
+}
+
+function renderPqrApp() {
+  const esG = USER && USER.role === 'gestion';
+  app.innerHTML = `
+  <div class="home-wrap">
+    <div class="home-box">
+      <div class="logo-lg pqr">PQR</div>
+      <h1>Gestión de PQR</h1>
+      <p class="sub">Peticiones, quejas y reclamos de clientes</p>
+      <div class="warn" style="text-align:left">
+        Módulo en construcción. Aquí se registrarán y darán seguimiento a las quejas y reclamos
+        de los clientes finales.
+      </div>
+      <div class="card" style="text-align:left;margin-top:12px">
+        <div class="muted small">Sesión iniciada</div>
+        <div><b>${esc(USER.name || USER.username)}</b> · @${esc(USER.username)} · ${esG ? 'Gestión' : 'Reporte'}</div>
+        ${USER.operator ? `<div class="muted small">👤 ${esc(USER.operator)}</div>` : ''}
+      </div>
+      <a class="btn block secondary" href="#/">← Volver a módulos</a>
+      <button class="btn ghost block" id="pqr-out" type="button">Cerrar sesión</button>
+    </div>
+  </div>`;
+  $('#pqr-out').onclick = async () => {
+    try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
+    setToken(''); USER = null;
+    location.hash = '#/'; route();
   };
+}
+
+/* ============ LOGIN ============ */
+async function renderLogin(opts = {}) {
+  const appMod = opts.app === 'pqr' ? 'pqr' : 'nc';
+  MODULE = appMod;
+  const dest = appMod === 'pqr' ? '#/pqr' : '#/novedades';
+  const esPqr = appMod === 'pqr';
+  const logo = esPqr ? 'PQR' : 'NC';
+  const titulo = esPqr ? 'Gestión de PQR' : 'Gestión de Producto No Conforme';
+  const subtitulo = esPqr ? 'Peticiones, quejas y reclamos de clientes' : 'Novedades · Trazabilidad · Indicadores';
+  app.innerHTML = `
+  <div class="login-wrap"><div class="login-box"><div class="muted">Cargando usuarios…</div></div></div>`;
+  let acc = { login_mode: 'password', users: [] };
+  try { acc = await api('/api/auth/access?app=' + appMod); } catch { /* sin conexión */ }
+
+  const roleTag = (u) => (u.role === 'gestion' ? 'Gestión' : 'Reporte');
+
+  const finishLogin = async (r) => {
+    setToken(r.token);
+    USER = r.user;
+    if (r.user && r.user.operator) localStorage.setItem('nc_operator', r.user.operator);
+    if (appMod === 'nc') META = await api('/api/reports/meta');
+    toast('Bienvenido, ' + (r.user.operator || r.user.name || r.user.username));
+    location.hash = dest;
+    route();
+  };
+
+  const TIPOS = [
+    { key: 'reporte', label: 'Reporte', desc: 'Registra novedades' },
+    { key: 'gestion', label: 'Gestión', desc: 'Aprueba, administra y ve indicadores' },
+  ];
+  const etiqueta = (t) => (t === 'gestion' ? 'Gestión' : 'Reporte');
+
+  const showTypes = () => {
+    app.innerHTML = `
+    <div class="login-wrap">
+      <div class="login-box">
+        <div class="logo-lg${esPqr ? ' pqr' : ''}">${logo}</div>
+        <h1>${titulo}</h1>
+        <p class="sub">${subtitulo}</p>
+        <p class="pick-label">Seleccione el tipo de usuario</p>
+        <div class="user-pick">
+          ${TIPOS.map((t) => {
+            const n = acc.users.filter((u) => u.role === t.key).length;
+            return `
+            <button type="button" class="user-card" data-tipo="${t.key}">
+              <span class="uc-av">${t.key === 'gestion' ? 'G' : 'R'}</span>
+              <span class="uc-n">${t.label}</span>
+              <span class="uc-r">${n} usuario${n === 1 ? '' : 's'} · ${t.desc}</span>
+            </button>`;
+          }).join('')}
+        </div>
+        <a class="btn ghost block" href="#/">← Volver a módulos</a>
+      </div>
+    </div>`;
+    $$('.user-card[data-tipo]').forEach((b) => b.onclick = () => showUsers(b.dataset.tipo));
+  };
+
+  const showUsers = (tipo) => {
+    const label = etiqueta(tipo);
+    const lista = acc.users.filter((u) => u.role === tipo);
+    app.innerHTML = `
+    <div class="login-wrap">
+      <div class="login-box">
+        <div class="logo-lg${esPqr ? ' pqr' : ''}">${tipo === 'gestion' ? 'G' : 'R'}</div>
+        <h1>Usuarios de ${label}</h1>
+        <p class="sub">${lista.length} registrado${lista.length === 1 ? '' : 's'} con este tipo</p>
+        <div class="user-pick">
+          ${lista.map((u) => `
+            <button type="button" class="user-card" data-user="${esc(u.username)}">
+              <span class="uc-av">${esc((u.full_name || u.username).trim().charAt(0).toUpperCase())}</span>
+              <span class="uc-n">${esc(u.full_name || u.username)}</span>
+              <span class="uc-r">@${esc(u.username)}</span>
+            </button>`).join('')}
+          <button type="button" class="user-card" data-reg="${tipo}">
+            <span class="uc-av">＋</span>
+            <span class="uc-n">Crear usuario de ${label}</span>
+            <span class="uc-r">Registrarse</span>
+          </button>
+        </div>
+        ${lista.length ? '' : `<div class="warn" style="margin-bottom:12px">Todavía no hay usuarios de tipo ${label}. Cree el primero con «Crear usuario de ${label}».</div>`}
+        <button class="btn ghost block" id="uc-back" type="button">← Cambiar de tipo</button>
+        <a class="btn ghost block" href="#/">← Volver a módulos</a>
+      </div>
+    </div>`;
+
+    $('#uc-back').onclick = showTypes;
+    $$('.user-card[data-reg]').forEach((b) => b.onclick = () => showRegister(b.dataset.reg));
+    $$('.user-card[data-user]').forEach((b) => b.onclick = async () => {
+      const u = acc.users.find((x) => x.username === b.dataset.user);
+      if (acc.login_mode === 'usuarios') {
+        b.disabled = true;
+        try { finishLogin(await api('/api/auth/login', { method: 'POST', body: { username: b.dataset.user } })); }
+        catch (err) { toast(err.message, 'err'); b.disabled = false; }
+        return;
+      }
+      showCredentials(u);
+    });
+  };
+
+  const showCredentials = (u) => {
+    app.innerHTML = `
+    <div class="login-wrap">
+      <div class="login-box">
+        <div class="logo-lg${esPqr ? ' pqr' : ''}">${logo}</div>
+        <h1>${esc(u.full_name || u.username)}</h1>
+        <p class="sub">${roleTag(u)} · @${esc(u.username)}</p>
+        <form id="login-form">
+          <label class="field"><span>Su nombre (quien opera) <b class="req">*</b></span>
+            <input type="text" id="lg-name" autocomplete="name" autocapitalize="words"
+              value="${esc(localStorage.getItem('nc_operator') || '')}"
+              placeholder="Nombre y apellido" required autofocus />
+          </label>
+          <label class="field"><span>Contraseña <b class="req">*</b></span>
+            <input type="password" id="lg-pass" autocomplete="current-password" required />
+          </label>
+          <button class="btn block" type="submit">Ingresar</button>
+        </form>
+        <button class="btn ghost block" id="lg-back" type="button">← Cambiar de usuario</button>
+        <a class="btn ghost block" href="#/">← Volver a módulos</a>
+      </div>
+    </div>`;
+
+    $('#lg-back').onclick = () => showUsers(u.role);
+    $('#login-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const name = $('#lg-name').value.trim();
+      if (!name) { toast('Escriba su nombre', 'err'); $('#lg-name').focus(); return; }
+      try {
+        const r = await api('/api/auth/login', {
+          method: 'POST',
+          body: { username: u.username, password: $('#lg-pass').value, operator: name, app: appMod },
+        });
+        await finishLogin(r);
+      } catch (err) { toast(err.message, 'err'); }
+    };
+  };
+
+  const showRegister = (tipo) => {
+    const esG = tipo === 'gestion';
+    const etiqueta = esG ? 'Gestión' : 'Reporte';
+    app.innerHTML = `
+    <div class="login-wrap">
+      <div class="login-box">
+        <div class="logo-lg">＋</div>
+        <h1>Registro de usuario</h1>
+        <p class="sub">Tipo de usuario: <b>${etiqueta}</b></p>
+        <div class="badge ${esG ? 'CERRADO' : 'PROCESO'}" style="margin-bottom:12px">${etiqueta.toUpperCase()}</div>
+        <form id="reg-form">
+          <label class="field"><span>Nombre completo <b class="req">*</b></span>
+            <input type="text" id="rg-name" autocomplete="name" autocapitalize="words"
+              value="${esc(localStorage.getItem('nc_operator') || '')}"
+              placeholder="Nombre y apellido" required autofocus /></label>
+          <label class="field"><span>Usuario (para ingresar) <b class="req">*</b></span>
+            <input type="text" id="rg-user" autocomplete="username" autocapitalize="off"
+              spellcheck="false" placeholder="ej. jperez" required /></label>
+          <label class="field"><span>Contraseña <b class="req">*</b></span>
+            <input type="password" id="rg-pass" autocomplete="new-password" minlength="6" required /></label>
+          <label class="field"><span>Confirmar contraseña <b class="req">*</b></span>
+            <input type="password" id="rg-pass2" autocomplete="new-password" minlength="6" required /></label>
+          <div class="warn" style="margin:4px 0 12px">
+            La cuenta quedará <b>pendiente</b>: un usuario de Gestión activo debe aprobarla antes de poder ingresar.
+          </div>
+          <button class="btn block" type="submit">Crear cuenta de ${etiqueta}</button>
+        </form>
+        <button class="btn ghost block" id="rg-back" type="button">← Volver</button>
+      </div>
+    </div>`;
+
+    $('#rg-back').onclick = () => showUsers(tipo);
+    $('#reg-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const name = $('#rg-name').value.trim();
+      const user = $('#rg-user').value.trim();
+      const pass = $('#rg-pass').value;
+      const pass2 = $('#rg-pass2').value;
+      if (name.length < 3) { toast('Escriba su nombre completo', 'err'); $('#rg-name').focus(); return; }
+      if (!/^[a-zA-Z0-9._-]{3,20}$/.test(user)) {
+        toast('Usuario: 3-20 caracteres (letras, números, . _ -)', 'err'); $('#rg-user').focus(); return;
+      }
+      if (pass.length < 6) { toast('La contraseña debe tener al menos 6 caracteres', 'err'); $('#rg-pass').focus(); return; }
+      if (pass !== pass2) { toast('Las contraseñas no coinciden', 'err'); $('#rg-pass2').focus(); return; }
+      try {
+        const r = await api('/api/auth/register', {
+          method: 'POST',
+          body: { username: user, password: pass, confirm: pass2, full_name: name, role: tipo, app: appMod },
+        });
+        localStorage.setItem('nc_operator', name);
+        toast(r.mensaje || 'Cuenta creada. Pendiente de aprobación.', 'info');
+        try { acc = await api('/api/auth/access?app=' + appMod); } catch { /* sin conexión */ }
+        showUsers(tipo);
+      } catch (err) { toast(err.message, 'err'); }
+    };
+  };
+
+  showTypes();
 }
 
 /* ============ SHELL ============ */
@@ -106,18 +326,19 @@ function shell(content, active) {
   const nav = [
     ['#/dashboard', 'dashboard', '', 'Indicadores'],
     ['#/novedades', 'novedades', '', 'Novedades'],
-    isG ? ['#/gestion', 'gestion', '', 'Gestión'] : null,
+    isG ? ['#/gestion', 'gestion', '', 'Gestión'] : ['#/usuarios', 'usuarios', '', 'Usuarios'],
   ].filter(Boolean);
   app.innerHTML = `
   <div class="layout">
     <aside class="sidebar">
-      <div class="brand"><div class="logo">NC</div><div>Gestión NC</div></div>
+      <a class="brand" href="#/" title="Elegir módulo"><div class="logo">NC</div><div>Gestión NC</div></a>
       <nav>
         ${nav.map(([h, k, i, t]) => `<a href="${h}" class="${active === k ? 'active' : ''}"><span>${i}</span> ${t}</a>`).join('')}
       </nav>
       <div class="userbox">
         <div class="name">${esc(USER.name || USER.username)}</div>
         <div class="role">${USER.role === 'gestion' ? 'Gestión' : 'Reporte'} · @${esc(USER.username)}</div>
+        ${USER.operator ? `<div class="op">👤 ${esc(USER.operator)}</div>` : ''}
         <button class="btn sm secondary" id="btn-pass">Cambiar contraseña</button>
         <button class="btn sm ghost" id="btn-logout" style="color:#cfe0ef;border-color:rgba(255,255,255,.3);margin-top:6px">Salir</button>
       </div>
@@ -126,8 +347,8 @@ function shell(content, active) {
   </div>`;
   $('#btn-logout').onclick = async () => {
     try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
-    TOKEN = ''; USER = null; localStorage.removeItem('nc_token');
-    location.hash = '#/login'; route();
+    setToken(''); USER = null;
+    location.hash = '#/'; route();
   };
   $('#btn-pass').onclick = modalChangePassword;
 }
@@ -155,9 +376,25 @@ async function renderDashboard() {
     <div class="card chart-card"><h3>Evolución mensual</h3><div class="chart-box"><canvas id="ch-mes"></canvas></div></div>
     <div class="card chart-card"><h3>Top operarios con más hallazgos</h3><div class="chart-box"><canvas id="ch-operarios"></canvas></div></div>
     <div class="card chart-card"><h3>Novedades por turno</h3><div class="chart-box"><canvas id="ch-turno"></canvas></div></div>
+  </div>
+  <div class="card" id="card-unidades">
+    <h3 class="section" style="margin-top:0">Unidades implicadas vs unidades terminadas (órdenes padre de Elemental)</h3>
+    <p class="muted small">Compara las unidades de las novedades con las unidades terminadas de las órdenes de fabricación padre, mes por mes. Fuente: solo consulta a Elemental Web.</p>
+    <div class="row-flex">
+      <label class="field"><span>Producto / referencia</span>
+        <select id="u-ref">
+          <option value="">Todos los productos</option>
+        </select></label>
+      <button class="btn secondary" id="u-aplicar" style="margin-bottom:2px">Ver</button>
+    </div>
+    <div id="u-nota" class="muted small"></div>
+    <div id="u-tabla" class="mt"></div>
+    <div class="chart-box" style="height:260px;margin-top:14px"><canvas id="ch-unidades"></canvas></div>
   </div>`;
   shell(html, 'dashboard');
   charts.forEach((c) => c.destroy()); charts = [];
+  $('#u-aplicar').onclick = () => loadUnidades(desde || '2026-01-01', hasta, $('#u-ref').value);
+  loadUnidades(desde || '2026-01-01', hasta).catch(() => {});
   $('#f-aplicar').onclick = () => {
     const q = new URLSearchParams();
     if ($('#f-desde').value) q.set('desde', $('#f-desde').value);
@@ -210,6 +447,81 @@ async function renderDashboard() {
 
 function qsFromHash() {
   return location.hash.split('?')[1] || '';
+}
+
+async function loadUnidades(desde, hasta, ref) {
+  const tabla = $('#u-tabla');
+  const nota = $('#u-nota');
+  if (!tabla) return;
+  if (!$('#u-ref').options.length || $('#u-ref').options.length === 1) {
+    try {
+      const rr = await api('/api/indicators/unidades/referencias');
+      const sel = $('#u-ref');
+      rr.items.forEach((x) => {
+        const o = document.createElement('option');
+        o.value = x.referencia;
+        o.textContent = `${x.referencia} (${x.unidades} u. en novedades)`;
+        sel.appendChild(o);
+      });
+      if (ref) sel.value = ref;
+    } catch { /* sin catálogo */ }
+  }
+  tabla.innerHTML = '<div class="muted small">Consultando Elemental…</div>';
+  try {
+    const q = new URLSearchParams();
+    if (desde) q.set('desde', desde);
+    if (hasta) q.set('hasta', hasta);
+    if (ref) q.set('referencia', ref);
+    const u = await api('/api/indicators/unidades' + (q.toString() ? '?' + q.toString() : ''));
+
+    const t = u.totales;
+    nota.innerHTML = `
+      <div class="kpi" style="margin:6px 0">
+        <div class="v">${t.pct == null ? '—' : t.pct + '%'}</div>
+        <div class="l">Unidades implicadas sobre unidades terminadas (${ref ? 'ref ' + esc(ref) : 'total'})</div>
+      </div>
+      <div>Implicadas: <b>${t.unidades_implicadas}</b> · Terminadas (órdenes padre): <b>${Math.round(t.unidades_terminadas)}</b></div>
+      ${u.nota ? `<div class="mt">Cobertura: ${u.nota.ordenes_padres} órdenes padre · ${u.nota.catalogo_productos} productos en catálogo · ${u.nota.ofs_sin_producto_identificado} órdenes sin producto identificado · ${u.nota.ofs_terminadas_sin_fecha_inicio} sin fecha de inicio.</div>` : ''}`;
+
+    if (!u.filas.length) {
+      tabla.innerHTML = '<div class="warn">No hay datos para ese rango.</div>';
+      return;
+    }
+    tabla.innerHTML = `
+      <div class="table-wrap"><table class="data card-rows">
+        <thead><tr><th>Mes</th><th>Novedades</th><th>Unidades implicadas</th><th>Unidades terminadas (padre)</th><th>% implicadas / terminadas</th></tr></thead>
+        <tbody>${u.filas.map((f) => `
+          <tr>
+            <td data-label="Mes" class="nowrap">${esc(f.mes)}</td>
+            <td data-label="Novedades">${f.reportes}</td>
+            <td data-label="Unidades implicadas">${f.unidades_implicadas}</td>
+            <td data-label="Unidades terminadas">${Math.round(f.unidades_terminadas)}</td>
+            <td data-label="% implicadas / terminadas">${f.pct == null ? '—' : f.pct + '%'}</td>
+          </tr>`).join('')}</tbody>
+      </table></div>`;
+
+    const canvasU = $('#ch-unidades');
+    if (canvasU._chart) { canvasU._chart.destroy(); canvasU._chart = null; }
+    const chartU = new Chart(canvasU, {
+      type: 'bar',
+      data: {
+        labels: u.filas.map((f) => f.mes).reverse(),
+        datasets: [
+          { label: 'Unidades implicadas (novedades)', data: u.filas.map((f) => f.unidades_implicadas).reverse(), backgroundColor: '#d64545' },
+          { label: 'Unidades terminadas (órdenes padre)', data: u.filas.map((f) => Math.round(f.unidades_terminadas)).reverse(), backgroundColor: '#2e75b6' },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom' } },
+        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+      },
+    });
+    canvasU._chart = chartU;
+    charts.push(chartU);
+  } catch (e) {
+    tabla.innerHTML = `<div class="warn">${esc(e.message)}</div>`;
+  }
 }
 
 /* ============ EXPORT ============ */
@@ -268,7 +580,7 @@ async function renderList() {
       <button class="btn ghost" id="fl-clear">Limpiar</button>
     </div>
     <div class="table-wrap">
-      <table class="data">
+      <table class="data card-rows">
         <thead><tr>
           <th>ID</th><th>Fecha</th><th>Área</th><th>Tipo</th><th>Descripción</th><th>Ref. (Producto)</th>
           <th>N.° OF</th><th>Operario(s)</th><th>Und.</th><th>Estado</th><th>Fotos</th><th></th>
@@ -299,18 +611,18 @@ async function renderList() {
   } else {
     body.innerHTML = data.items.map((r) => `
       <tr>
-        <td><b>${r.id}</b></td>
-        <td class="nowrap">${fmtFecha(r.fecha_deteccion)}</td>
-        <td>${esc(r.area_reporta) || '—'}</td>
-        <td>${esc(r.tipo_hallazgo) || '—'}</td>
-        <td class="desc" title="${esc(r.descripcion)}">${collapse(r.descripcion)}</td>
-        <td class="nowrap">${esc(r.referencia) || '—'}</td>
-        <td class="nowrap">${esc(r.orden_fabricacion) || '—'}</td>
-        <td class="desc" title="${esc(r.operario_nombre)}">${collapse(r.operario_nombre || r.operario_codigo, 60)}</td>
-        <td class="center">${r.cantidad ?? '—'}</td>
-        <td>${badgeEstado(r.estado)}</td>
-        <td class="center">${r.photo_count ? `<span class="photo-chip">Fotos: ${r.photo_count}</span>` : '<span class="muted">0</span>'}</td>
-        <td class="nowrap"><a class="btn sm secondary" href="#/novedades/${r.id}">Ver</a></td>
+        <td data-label="ID"><b>${r.id}</b></td>
+        <td data-label="Fecha" class="nowrap">${fmtFecha(r.fecha_deteccion)}</td>
+        <td data-label="Área">${esc(r.area_reporta) || '—'}</td>
+        <td data-label="Tipo">${esc(r.tipo_hallazgo) || '—'}</td>
+        <td data-label="Descripción" class="desc" title="${esc(r.descripcion)}">${collapse(r.descripcion)}</td>
+        <td data-label="Ref. (Producto)" class="nowrap">${esc(r.referencia) || '—'}</td>
+        <td data-label="N.° OF" class="nowrap">${esc(r.orden_fabricacion) || '—'}</td>
+        <td data-label="Operario(s)" class="desc" title="${esc(r.operario_nombre)}">${collapse(r.operario_nombre || r.operario_codigo, 60)}</td>
+        <td data-label="Und." class="center">${r.cantidad ?? '—'}</td>
+        <td data-label="Estado">${badgeEstado(r.estado)}</td>
+        <td data-label="Fotos" class="center">${r.photo_count ? `<span class="photo-chip">Fotos: ${r.photo_count}</span>` : '<span class="muted">0</span>'}</td>
+        <td class="nowrap row-actions"><a class="btn sm secondary" href="#/novedades/${r.id}">Ver</a></td>
       </tr>`).join('');
   }
   const pages = Math.ceil(data.total / listState.limit);
@@ -353,17 +665,37 @@ function resizeToJpeg(file, maxDim = 1600, quality = 0.85) {
 }
 
 /* ============ FORMULARIO (crear / editar) ============ */
-let formPhotos = [];      // Files nuevos
+let formPhotos = [];      // Files nuevos (evidencia)
+let formPhotosTrat = [];  // Files nuevos (tratamiento / cierre)
 let existingPhotos = [];  // fotos ya guardadas (edición)
+let existingPhotosTrat = [];
 let editReportId = null;
+let SUG = null;
+
+function loadSuggestions() {
+  if (!SUG) {
+    SUG = api('/api/reports/suggestions').catch(() => ({
+      colores: [], responsables_area: [], responsables_trat: [], responsables_cierre: [],
+      referencias: [], ordenes: [], otra_ref: [], quines: [], operario_cod: [], operario_nom: [],
+    }));
+  }
+  return SUG;
+}
+
+const datalist = (id, arr) => `<datalist id="${id}">${
+  (arr || []).map((x) => `<option value="${esc(x)}"></option>`).join('')
+}</datalist>`;
 
 async function renderForm(id) {
   editReportId = id ? Number(id) : null;
-  formPhotos = []; existingPhotos = [];
+  formPhotos = []; formPhotosTrat = []; existingPhotos = []; existingPhotosTrat = [];
+  const sug = await loadSuggestions();
   let r = null;
   if (editReportId) {
     r = await api('/api/reports/' + editReportId);
-    existingPhotos = r.photos || [];
+    const ph = r.photos || [];
+    existingPhotos = ph.filter((p) => p.tipo !== 'TRATAMIENTO');
+    existingPhotosTrat = ph.filter((p) => p.tipo === 'TRATAMIENTO');
   }
   const v = (k, d = '') => esc(r ? (r[k] ?? d) : d);
   const html = `
@@ -373,25 +705,32 @@ async function renderForm(id) {
     <a class="btn secondary" href="${editReportId ? '#/novedades/' + editReportId : '#/novedades'}">← Volver</a>
   </div>
   <form id="nc-form">
-    <div class="card">
-      <h3 class="section" style="margin-top:0">Detección</h3>
+    <div class="card step step-detect">
+      <h3 class="section step-title" style="margin-top:0"><span class="step-num">1</span> Detección del hallazgo</h3>
       <div class="form-grid">
         <label class="field"><span>Fecha de detección <b class="req">*</b></span>
           <input type="date" id="f-fecha" value="${r ? esc(r.fecha_deteccion) : hoyISO()}" required /></label>
         <label class="field"><span>Área que reporta <b class="req">*</b></span>
-          <input type="text" id="f-area" list="dl-areas" value="${v('area_reporta')}" required placeholder="Cedi, Planta…" />
-          <datalist id="dl-areas">${META.areas.map((a) => `<option value="${esc(a)}">`).join('')}</datalist></label>
+          <select id="f-area" required>
+            <option value="">Seleccione…</option>
+            ${(() => {
+              const cur = v('area_reporta');
+              const opts = META.areas.slice();
+              if (cur && !opts.includes(cur)) opts.unshift(cur);
+              return opts.map((a) => `<option ${cur === a ? 'selected' : ''}>${esc(a)}</option>`).join('');
+            })()}
+          </select></label>
         <label class="field"><span>Quien registra</span>
-          <input type="text" id="f-registra" value="${r ? v('quien_registra') : esc(USER.name || USER.username)}" /></label>
+          <input type="text" id="f-registra" list="dl-registra" autocomplete="name" autocapitalize="words" value="${r ? v('quien_registra') : esc(USER.operator || USER.name || USER.username)}" /></label>
         <label class="field"><span>Responsable del área <b class="req">*</b></span>
-          <input type="text" id="f-resp-area" value="${v('responsable_area')}" required /></label>
+          <input type="text" id="f-resp-area" list="dl-resp-area" autocomplete="off" autocapitalize="words" value="${v('responsable_area')}" required /></label>
         <label class="field"><span>Tipo de hallazgo <b class="req">*</b></span>
           <select id="f-tipo" required>
             <option value="">Seleccione…</option>
             ${META.tipos.map((t) => `<option ${r && r.tipo_hallazgo === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}
           </select></label>
         <label class="field"><span>Color o parte con el error <b class="req">*</b></span>
-          <input type="text" id="f-color" value="${v('color_parte_error')}" required placeholder="Ej. Amarillo, tapa inferior, etiqueta frontal…" /></label>
+          <input type="text" id="f-color" list="dl-color" autocomplete="off" autocapitalize="words" value="${v('color_parte_error')}" required placeholder="Ej. Amarillo, tapa inferior, etiqueta frontal…" /></label>
         <label class="field"><span>Turno <b class="req">*</b></span>
           <select id="f-turno" required>
             <option value="" ${r && !r.turno ? 'selected' : ''}>Seleccione…</option>
@@ -403,14 +742,14 @@ async function renderForm(id) {
         <label class="field"><span>Cantidad total implicada (unidades)</span>
           <input type="number" id="f-cant" min="0" step="1" value="${r && r.cantidad != null ? esc(r.cantidad) : ''}" /></label>
         <label class="field"><span>Referencia / Producto <b class="req">*</b></span>
-          <input type="text" id="f-ref" value="${v('referencia')}" required placeholder="Código interno del producto" /></label>
+          <input type="text" id="f-ref" list="dl-ref" autocomplete="off" autocapitalize="characters" value="${v('referencia')}" required placeholder="Código interno del producto" /></label>
         <label class="field full"><span>Otra referencia física (serial, lote, ubicación, proveedor…)</span>
-          <input type="text" id="f-ref-fisica" value="${v('otra_referencia')}" placeholder="Opcional: cualquier dato que identifique la pieza" /></label>
+          <input type="text" id="f-ref-fisica" list="dl-otra" autocomplete="off" autocapitalize="off" value="${v('otra_referencia')}" placeholder="Opcional: cualquier dato que identifique la pieza" /></label>
       </div>
     </div>
 
-    <div class="card">
-      <h3 class="section" style="margin-top:0">Evidencias — mínimo 3, máximo ${META.max_photos} fotos <b class="req">*</b></h3>
+    <div class="card step step-evid">
+      <h3 class="section step-title" style="margin-top:0"><span class="step-num">2</span> Evidencias de la detección — mínimo 3, máximo ${META.max_photos} fotos <b class="req">*</b></h3>
       <div class="form-grid">
         <label class="field"><span>Abrir cámara (celular)</span>
           <button type="button" class="btn secondary" id="btn-cam">📷 Tomar foto con la cámara</button>
@@ -422,11 +761,11 @@ async function renderForm(id) {
       <div class="photo-count-warn" id="photo-warn"></div>
     </div>
 
-    <div class="card">
-      <h3 class="section" style="margin-top:0">Trazabilidad — Orden de fabricación y operarios</h3>
+    <div class="card step step-trace">
+      <h3 class="section step-title" style="margin-top:0"><span class="step-num">3</span> Trazabilidad — Orden de fabricación y operarios</h3>
       <div class="form-grid">
         <label class="field"><span>N.° Orden de fabricación <b class="req">*</b></span>
-          <input type="text" id="f-of" value="${v('orden_fabricacion')}" required placeholder="Ej. OF-12345" /></label>
+          <input type="text" id="f-of" list="dl-of" autocomplete="off" autocapitalize="characters" value="${v('orden_fabricacion')}" required placeholder="Ej. OF-12345" /></label>
         <label class="field"><span>Fecha OF / consulta</span>
           <input type="date" id="f-of-fecha" value="${r ? esc(r.fecha_deteccion) : hoyISO()}" /></label>
         <div class="field" style="display:flex;align-items:flex-end">
@@ -448,11 +787,11 @@ async function renderForm(id) {
           `${l.fuente} (${l.total_operarios} operarios, ${fmtFecha(l.created_at)} )`).join(' · ')}</div>` : ''}
     </div>
 
-    <div class="card">
-      <h3 class="section" style="margin-top:0">Tratamiento y cierre</h3>
+    <div class="card step step-close">
+      <h3 class="section step-title" style="margin-top:0"><span class="step-num">4</span> Tratamiento y cierre</h3>
       <div class="form-grid">
         <label class="field"><span>Responsable del tratamiento</span>
-          <input type="text" id="f-resp-trat" value="${v('responsable_tratamiento')}" /></label>
+          <input type="text" id="f-resp-trat" list="dl-resp-trat" autocomplete="off" autocapitalize="words" value="${v('responsable_tratamiento')}" /></label>
         <label class="field"><span>Verificación de eficacia</span>
           <select id="f-verif">
             <option value="" ${r && !r.verificacion_eficacia ? 'selected' : ''}>Sin verificar</option>
@@ -466,11 +805,39 @@ async function renderForm(id) {
         <label class="field full"><span>Acción o tratamiento implementado</span>
           <textarea id="f-accion">${v('accion_tratamiento')}</textarea></label>
         <label class="field"><span>Responsable del cierre</span>
-          <input type="text" id="f-resp-cierre" value="${v('responsable_cierre')}" /></label>
+          <input type="text" id="f-resp-cierre" list="dl-resp-cierre" autocomplete="off" autocapitalize="words" value="${v('responsable_cierre')}" /></label>
         <label class="field"><span>Fecha de cierre (solo si está CERRADO)</span>
           <input type="date" id="f-fec-cierre" value="${r && r.fecha_cierre ? esc(r.fecha_cierre) : ''}" /></label>
       </div>
+      <div class="mt">
+        <h4 class="sub-title">Fotos del tratamiento / cierre <span class="muted small">(opcional, máx. ${META.max_photos})</span></h4>
+        <div class="form-grid">
+          <label class="field"><span>Abrir cámara (celular)</span>
+            <button type="button" class="btn secondary" id="btn-cam-trat">📷 Tomar foto con la cámara</button>
+            <input type="file" id="f-cam-trat" accept="image/*" capture="environment" style="display:none" /></label>
+          <label class="field"><span>Seleccionar imágenes (JPG/PNG)</span>
+            <input type="file" id="f-fotos-trat" accept="image/jpeg,image/png,image/gif,image/bmp" multiple /></label>
+        </div>
+        <div class="photo-strip" id="photo-strip-trat"></div>
+        <div class="photo-count-warn" id="photo-warn-trat"></div>
+      </div>
     </div>
+
+    <div class="quick-bar">
+      <button class="btn ghost" type="button" id="btn-repeat" title="Copia los datos de la última novedad registrada">🔁 Repetir última novedad</button>
+      <span class="muted small">Tip: con <b>Tab</b> o <b>Enter</b> se salta al siguiente campo</span>
+    </div>
+
+    ${datalist('dl-color', sug.colores)}
+    ${datalist('dl-resp-area', sug.responsables_area)}
+    ${datalist('dl-resp-trat', sug.responsables_trat)}
+    ${datalist('dl-resp-cierre', sug.responsables_cierre)}
+    ${datalist('dl-ref', sug.referencias)}
+    ${datalist('dl-of', sug.ordenes)}
+    ${datalist('dl-otra', sug.otra_ref)}
+    ${datalist('dl-registra', sug.quines)}
+    ${datalist('dl-op-cod', sug.operario_cod)}
+    ${datalist('dl-op-nom', sug.operario_nom)}
 
     <div class="actions">
       <button class="btn" type="submit">Guardar novedad</button>
@@ -479,8 +846,9 @@ async function renderForm(id) {
   </form>`;
   shell(html, 'novedades');
   renderPhotoStrip();
+  renderPhotoStrip('trat');
 
-  const cods = String(r && r.operario_codigo ? r.operario_codigo : '').split(/[,;]|\s+-\s+/).map((s) => s.trim()).filter(Boolean);
+  const cods = String(r && r.operario_codigo ? r.operario_codigo : '').split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
   const noms = String(r && r.operario_nombre ? r.operario_nombre : '').split(/[,;]|\s+-\s+/).map((s) => s.trim()).filter(Boolean);
   const opRows = [];
   const maxRows = Math.max(cods.length, noms.length, 1);
@@ -489,8 +857,8 @@ async function renderForm(id) {
   const renderOpRows = () => {
     $('#ops-rows').innerHTML = opRows.map((row, i) => `
       <div class="op-row" data-i="${i}">
-        <input type="text" class="op-row-cod" value="${esc(row.cod)}" placeholder="Código Ej. 479" />
-        <input type="text" class="op-row-nom" value="${esc(row.nom)}" placeholder="Nombre (según Elemental)" />
+        <input type="text" class="op-row-cod" list="dl-op-cod" value="${esc(row.cod)}" placeholder="Código Ej. 479" inputmode="numeric" autocapitalize="off" />
+        <input type="text" class="op-row-nom" list="dl-op-nom" value="${esc(row.nom)}" placeholder="Nombre (según Elemental)" autocapitalize="words" />
         <span class="op-row-st muted small"></span>
         <button type="button" class="op-row-del" title="Quitar operario">✕</button>
       </div>`).join('');
@@ -530,20 +898,75 @@ async function renderForm(id) {
 
   $('#btn-cam').onclick = () => $('#f-cam').click();
 
-  const addFiles = async (files) => {
+  /* --- Relleno rápido: repetir la última novedad --- */
+  const btnRepeat = $('#btn-repeat');
+  if (btnRepeat) btnRepeat.onclick = async () => {
+    try {
+      const d = await api('/api/reports?limit=1');
+      const last = d.items && d.items[0];
+      if (!last) { toast('No hay novedades anteriores', 'err'); return; }
+      const set = (sel, val) => { const el = $(sel); if (el && val != null && String(val).trim()) el.value = val; };
+      set('#f-area', last.area_reporta);
+      set('#f-resp-area', last.responsable_area);
+      set('#f-registra', last.quien_registra);
+      set('#f-tipo', last.tipo_hallazgo);
+      set('#f-color', last.color_parte_error);
+      set('#f-turno', last.turno);
+      set('#f-ref', last.referencia);
+      set('#f-ref-fisica', last.otra_referencia);
+      set('#f-of', last.orden_fabricacion);
+      set('#f-resp-trat', last.responsable_tratamiento);
+      const cods = String(last.operario_codigo || '').split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
+      const noms = String(last.operario_nombre || '').split(/[,;]|\s+-\s+/).map((s) => s.trim()).filter(Boolean);
+      if (cods.length || noms.length) {
+        opRows.length = 0;
+        const n = Math.max(cods.length, noms.length);
+        for (let i = 0; i < n; i++) opRows.push({ cod: cods[i] || '', nom: noms[i] || '' });
+        renderOpRows();
+      }
+      toast('Copiados los datos de la novedad #' + last.id);
+      const first = $('#f-color');
+      if (first) first.focus();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+
+  /* --- Enter / Tab: saltar al siguiente campo --- */
+  const formEl = $('#nc-form');
+  formEl.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    const t = e.target;
+    if (t.tagName === 'BUTTON' || t.tagName === 'TEXTAREA' || t.type === 'file') return;
+    if (t.tagName !== 'INPUT' && t.tagName !== 'SELECT') return;
+    e.preventDefault();
+    const fields = [...formEl.querySelectorAll('input, select, textarea, button')]
+      .filter((el) => !el.disabled && el.type !== 'hidden' && el.offsetParent !== null);
+    const i = fields.indexOf(t);
+    const next = fields[i + 1];
+    if (next) next.focus();
+  });
+  const btnCamTrat = $('#btn-cam-trat');
+  if (btnCamTrat) btnCamTrat.onclick = () => $('#f-cam-trat').click();
+
+  const addFiles = async (files, tipo = 'evid') => {
+    const trat = tipo === 'trat';
     for (const file of files) {
-      if (formPhotos.length + existingPhotos.length >= META.max_photos) {
-        toast(`Máximo ${META.max_photos} fotos por reporte`, 'err');
+      const cur = trat ? formPhotosTrat.length + existingPhotosTrat.length
+        : formPhotos.length + existingPhotos.length;
+      if (cur >= META.max_photos) {
+        toast(`Máximo ${META.max_photos} fotos en esta sección`, 'err');
         break;
       }
       try {
-        formPhotos.push(await resizeToJpeg(file));
+        const j = await resizeToJpeg(file);
+        if (trat) formPhotosTrat.push(j); else formPhotos.push(j);
       } catch (err) { toast(err.message, 'err'); }
     }
-    renderPhotoStrip();
+    renderPhotoStrip(tipo);
   };
-  $('#f-cam').onchange = (e) => { const f = [...e.target.files]; e.target.value = ''; addFiles(f); };
-  $('#f-fotos').onchange = (e) => { const f = [...e.target.files]; e.target.value = ''; addFiles(f); };
+  $('#f-cam').onchange = (e) => { const f = [...e.target.files]; e.target.value = ''; addFiles(f, 'evid'); };
+  $('#f-fotos').onchange = (e) => { const f = [...e.target.files]; e.target.value = ''; addFiles(f, 'evid'); };
+  if ($('#f-cam-trat')) $('#f-cam-trat').onchange = (e) => { const f = [...e.target.files]; e.target.value = ''; addFiles(f, 'trat'); };
+  if ($('#f-fotos-trat')) $('#f-fotos-trat').onchange = (e) => { const f = [...e.target.files]; e.target.value = ''; addFiles(f, 'trat'); };
 
   $('#btn-lookup').onclick = doLookup;
   $('#btn-add-op').onclick = () => modalPickOperator(renderOpRows);
@@ -595,6 +1018,7 @@ async function renderForm(id) {
     const fd = new FormData();
     fd.append('data', JSON.stringify(obj));
     formPhotos.forEach((f) => fd.append('fotos', f, f.name));
+    formPhotosTrat.forEach((f) => fd.append('fotos_trat', f, f.name));
     try {
       const saved = editReportId
         ? await api('/api/reports/' + editReportId, { method: 'PUT', body: fd })
@@ -605,29 +1029,41 @@ async function renderForm(id) {
   };
 }
 
-function renderPhotoStrip() {
-  const strip = $('#photo-strip');
+function renderPhotoStrip(tipo = 'evid') {
+  const trat = tipo === 'trat';
+  const strip = $(trat ? '#photo-strip-trat' : '#photo-strip');
   if (!strip) return;
+  const warn = $(trat ? '#photo-warn-trat' : '#photo-warn');
+  const existArr = trat ? existingPhotosTrat : existingPhotos;
+  const newarr = trat ? formPhotosTrat : formPhotos;
   const items = [
-    ...existingPhotos.map((p) => ({ kind: 'exist', id: p.id, url: p.url, name: p.original_name })),
-    ...formPhotos.map((f, i) => ({ kind: 'new', i, url: URL.createObjectURL(f), name: f.name })),
+    ...existArr.map((p) => ({ kind: 'exist', id: p.id, url: p.url, name: p.original_name })),
+    ...newarr.map((f, i) => ({ kind: 'new', i, url: URL.createObjectURL(f), name: f.name })),
   ];
   strip.innerHTML = items.map((it) => `
     <div class="photo-thumb">
       <img src="${it.url}" alt="${esc(it.name)}" data-full="${it.url}" onclick="window.__openLightbox(this.dataset.full)" />
       <button type="button" class="del" data-kind="${it.kind}" data-id="${it.id ?? it.i}" title="Quitar">✕</button>
-    </div>`).join('') || '<span class="muted small">Sin fotos adjuntas.</span>';
+    </div>`).join('') || `<span class="muted small">Sin fotos ${trat ? 'de tratamiento' : 'adjuntas'}.</span>`;
   const total = items.length;
-  $('#photo-warn').textContent = total >= META.max_photos
-    ? `Límite alcanzado: ${total}/${META.max_photos} fotos.`
-    : total < 3
-      ? `Faltan fotos: mínimo 3 (tiene ${total}/${META.max_photos}).`
-      : `${total}/${META.max_photos} fotos.`;
-  $('#photo-warn').style.color = total < 3 ? 'var(--danger, #c00)' : '';
-  $$('#photo-strip .del').forEach((b) => b.onclick = () => {
-    if (b.dataset.kind === 'exist') existingPhotos = existingPhotos.filter((p) => String(p.id) !== b.dataset.id);
+  if (warn) {
+    warn.textContent = total >= META.max_photos
+      ? `Límite alcanzado: ${total}/${META.max_photos} fotos.`
+      : !trat && total < 3
+        ? `Faltan fotos: mínimo 3 (tiene ${total}/${META.max_photos}).`
+        : `${total}/${META.max_photos} fotos.`;
+    if (!trat) warn.style.color = total < 3 ? 'var(--danger, #c00)' : '';
+  }
+  $$(trat ? '#photo-strip-trat .del' : '#photo-strip .del').forEach((b) => b.onclick = async () => {
+    if (b.dataset.kind === 'exist') {
+      if (!confirm('¿Quitar esta foto guardada?')) return;
+      try { await api(`/api/reports/${editReportId}/photos/${b.dataset.id}`, { method: 'DELETE' }); }
+      catch (e) { toast(e.message, 'err'); return; }
+      if (trat) existingPhotosTrat = existingPhotosTrat.filter((p) => String(p.id) !== b.dataset.id);
+      else existingPhotos = existingPhotos.filter((p) => String(p.id) !== b.dataset.id);
+    } else if (trat) formPhotosTrat.splice(Number(b.dataset.i), 1);
     else formPhotos.splice(Number(b.dataset.i), 1);
-    renderPhotoStrip();
+    renderPhotoStrip(tipo);
   });
 }
 
@@ -762,10 +1198,15 @@ async function renderDetail(id) {
       ${canEdit ? `<a class="btn" href="#/novedades/${r.id}/editar">Editar</a>` : ''}
       ${isG && r.estado !== 'CERRADO' ? `<button class="btn success" id="btn-cerrar">Cerrar novedad</button>` : ''}
       ${isG ? `<button class="btn danger" id="btn-del">Eliminar</button>` : ''}
+      ${!isG && r.puede_eliminar
+        ? `<button class="btn danger" id="btn-del" title="Solo durante los primeros 20 minutos">Eliminar${r.minutos_restantes != null ? ` (${r.minutos_restantes} min)` : ''}</button>`
+        : ''}
+      ${!isG && !r.puede_eliminar ? `<span class="muted small" title="${esc(r.motivo_eliminar || '')}">🔒 Sin permiso para eliminar</span>` : ''}
       <a class="btn secondary" href="#/novedades">← Lista</a>
     </div>
   </div>
-  <div class="card">
+  <div class="card step step-detect">
+    <h3 class="section step-title" style="margin-top:0"><span class="step-num">1</span> Detección del hallazgo</h3>
     <div class="detail-grid">
       ${dk('fecha_deteccion', 'Fecha de detección', 'big')}
       ${dk('area_reporta', 'Área que reporta', 'big')}
@@ -776,31 +1217,55 @@ async function renderDetail(id) {
       ${dk('responsable_area', 'Responsable del área')}
       ${dk('referencia', 'Referencia / Producto', 'big')}
       ${dk('otra_referencia', 'Otra referencia física', 'big')}
-      ${dk('orden_fabricacion', 'N.° Orden de fabricación', 'big')}
-      ${r.orden_fabricacion ? `<div class="detail-item"><div class="k">Partes y fechas de la OF</div><div class="v"><button type="button" class="btn sm" id="btn-of-detail">Ver en Elemental</button></div></div>` : ''}
       ${dk('cantidad', 'Unidades implicadas', 'big')}
-      ${dk('operario_nombre', 'Operario(s) implicado(s)', 'big')}
-      ${dk('operario_codigo', 'Código(s) operario')}
-      ${dk('evidencia_original', 'Evidencia original (archivo)')}
-      ${dk('responsable_tratamiento', 'Responsable tratamiento')}
-      ${dk('verificacion_eficacia', 'Verificación eficacia')}
-      ${dk('responsable_cierre', 'Responsable cierre')}
-      ${dk('fecha_cierre', 'Fecha de cierre')}
     </div>
-    <h3 class="section">Descripción del hallazgo</h3>
+    <h3 class="section step-sub">Descripción del hallazgo</h3>
     <div style="white-space:pre-wrap">${esc(r.descripcion) || '—'}</div>
-    <h3 class="section">Acción o tratamiento implementado</h3>
-    <div style="white-space:pre-wrap">${esc(r.accion_tratamiento) || '—'}</div>
   </div>
-  <div class="card">
-    <h3 class="section" style="margin-top:0">Evidencias (${r.photos.length}/${META.max_photos})</h3>
+
+  <div class="card step step-evid">
+    <h3 class="section step-title" style="margin-top:0"><span class="step-num">2</span> Evidencias (${r.photo_count_evid}/${META.max_photos})</h3>
     <div class="photo-strip">
-      ${r.photos.length ? r.photos.map((p) => `
+      ${(r.photos_evidencia || []).length ? r.photos_evidencia.map((p) => `
         <div class="photo-thumb">
           <img src="${p.url}" alt="${esc(p.original_name)}" onclick="window.__openLightbox('${p.url}')" />
           ${canEdit ? `<button class="del" data-photo="${p.id}">✕</button>` : ''}
         </div>`).join('') : '<span class="muted">Sin fotos. El archivo original referenciado es: ' + (esc(r.evidencia_original) || 'ninguno') + '</span>'}
     </div>
+    <h4 class="sub-title">Fotos del tratamiento / cierre <span class="muted small">(${r.photo_count_trat}/${META.max_photos})</span></h4>
+    <div class="photo-strip">
+      ${(r.photos_tratamiento || []).length ? r.photos_tratamiento.map((p) => `
+        <div class="photo-thumb">
+          <img src="${p.url}" alt="${esc(p.original_name)}" onclick="window.__openLightbox('${p.url}')" />
+          ${canEdit ? `<button class="del" data-photo="${p.id}">✕</button>` : ''}
+        </div>`).join('') : '<span class="muted small">Sin fotos de tratamiento/cierre.</span>'}
+    </div>
+  </div>
+
+  <div class="card step step-trace">
+    <h3 class="section step-title" style="margin-top:0"><span class="step-num">3</span> Trazabilidad — Orden de fabricación y operarios</h3>
+    <div class="detail-grid">
+      ${dk('orden_fabricacion', 'N.° Orden de fabricación', 'big')}
+      ${r.orden_fabricacion ? `<div class="detail-item"><div class="k">Partes y fechas de la OF</div><div class="v"><button type="button" class="btn sm" id="btn-of-detail">Ver en Elemental</button></div></div>` : ''}
+      ${dk('operario_nombre', 'Operario(s) implicado(s)', 'big')}
+      ${dk('operario_codigo', 'Código(s) operario')}
+      ${dk('evidencia_original', 'Evidencia original (archivo)')}
+    </div>
+  </div>
+
+  <div class="card step step-close">
+    <div class="row-flex" style="justify-content:space-between;align-items:center;margin-bottom:6px">
+      <h3 class="section step-title" style="margin:0"><span class="step-num">4</span> Tratamiento y cierre</h3>
+      <button class="btn sm secondary" id="btn-memorando" type="button">📄 Memorando (Word)</button>
+    </div>
+    <div class="detail-grid">
+      ${dk('responsable_tratamiento', 'Responsable tratamiento')}
+      ${dk('verificacion_eficacia', 'Verificación eficacia')}
+      ${dk('responsable_cierre', 'Responsable cierre')}
+      ${dk('fecha_cierre', 'Fecha de cierre')}
+    </div>
+    <h3 class="section step-sub">Acción o tratamiento implementado</h3>
+    <div style="white-space:pre-wrap">${esc(r.accion_tratamiento) || '—'}</div>
   </div>`;
   shell(html, 'novedades');
 
@@ -811,6 +1276,8 @@ async function renderDetail(id) {
     catch (e) { toast(e.message, 'err'); }
   };
   const btnClose = $('#btn-cerrar');
+  const btnMemo = $('#btn-memorando');
+  if (btnMemo) btnMemo.onclick = () => modalMemorando(r);
   const btnOf = $('#btn-of-detail');
   if (btnOf) btnOf.onclick = async () => {
     const m = $('#modal');
@@ -871,6 +1338,7 @@ async function renderGestion(tab = 'usuarios') {
     <button data-t="operarios" class="${tab === 'operarios' ? 'active' : ''}">Operarios</button>
     <button data-t="catalogos" class="${tab === 'catalogos' ? 'active' : ''}">Catálogos</button>
     <button data-t="api" class="${tab === 'api' ? 'active' : ''}">API de operarios</button>
+    <button data-t="accesos" class="${tab === 'accesos' ? 'active' : ''}">Accesos</button>
   </div>
   <div id="gestion-body"><div class="card muted">Cargando…</div></div>`;
   shell(html, 'gestion');
@@ -878,56 +1346,176 @@ async function renderGestion(tab = 'usuarios') {
   if (tab === 'usuarios') return gUsuarios();
   if (tab === 'operarios') return gOperarios();
   if (tab === 'catalogos') return gCatalogos();
+  if (tab === 'accesos') return gAccesos();
   return gApi();
+}
+
+/* ============ AREA REPORTE: USUARIOS ============ */
+async function renderUsuarios() {
+  const html = `
+  <div class="page-title">
+    <div><h1>Usuarios de Reporte</h1>
+      <div class="sub">Cree cuentas con rol Reporte. Quedan pendientes hasta que un usuario de Gestión las apruebe.</div></div>
+    <div class="row-flex"><button class="btn" id="ru-new">+ Nuevo usuario</button></div>
+  </div>
+  <div id="rep-body"><div class="card muted">Cargando…</div></div>`;
+  shell(html, 'usuarios');
+  $('#ru-new').onclick = () => userModal(null, 'reporte');
+  return rUsuarios();
+}
+
+async function rUsuarios() {
+  const r = await api('/api/manage/users');
+  const pend = r.items.filter((u) => u.pending);
+  const body = $('#rep-body');
+  if (!body) return;
+  body.innerHTML = `
+  ${pend.length ? `<div class="warn" style="margin-bottom:14px">
+    <b>${pend.length} cuenta(s) esperando aprobación.</b> Aún no pueden ingresar: un usuario de Gestión activo debe aprobarlas en Gestión → Usuarios.
+  </div>` : ''}
+  <div class="card">
+    <div class="row-flex" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0;color:var(--primary)">Cuentas con rol Reporte <span class="muted small">(${r.items.length})</span></h3>
+      <button class="btn" id="ru-new2">+ Nuevo usuario</button>
+    </div>
+    ${r.items.length ? `
+    <div class="table-wrap"><table class="data card-rows">
+      <thead><tr><th>Usuario</th><th>Nombre</th><th>Estado</th><th>Creado</th></tr></thead>
+      <tbody>${r.items.map((u) => `
+        <tr>
+          <td data-label="Usuario"><b>${esc(u.username)}</b></td>
+          <td data-label="Nombre">${esc(u.full_name) || '—'}</td>
+          <td data-label="Estado">${u.pending
+            ? '<span class="badge ABIERTO">Pendiente de aprobación</span>'
+            : (u.active ? '<span class="badge CERRADO">Activo</span>' : '<span class="badge ABIERTO">Inactivo</span>')}</td>
+          <td data-label="Creado" class="nowrap small">${fmtFecha(u.created_at)}</td>
+        </tr>`).join('')}</tbody>
+    </table></div>` : '<div class="muted">Todavía no hay cuentas de Reporte. Cree la primera con «+ Nuevo usuario».</div>'}
+  </div>`;
+  $('#ru-new2').onclick = () => userModal(null, 'reporte');
+}
+
+async function gAccesos() {
+  const d = await api('/api/manage/access-log');
+  $('#gestion-body').innerHTML = `
+  <div class="card">
+    <h3 class="section" style="margin-top:0">Quién ingresó y desde cuándo (trazabilidad de accesos)</h3>
+    ${d.resumen.length ? `
+      <div class="table-wrap"><table class="data card-rows">
+        <thead><tr><th>Usuario</th><th>Nombre de quien opera</th><th>Accesos</th><th>Último ingreso</th></tr></thead>
+        <tbody>${d.resumen.map((x) => `<tr>
+          <td data-label="Usuario"><b>${esc(x.username)}</b></td>
+          <td data-label="Nombre de quien opera">${esc(x.operator || '—')}</td>
+          <td data-label="Accesos">${x.accesos}</td>
+          <td data-label="Último ingreso" class="nowrap">${esc(x.ultimo || '—')}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>` : '<div class="muted">Todavía no hay accesos registrados.</div>'}
+
+    <h3 class="section">Últimos ingresos</h3>
+    ${d.items.length ? `
+      <div class="table-wrap"><table class="data card-rows">
+        <thead><tr><th>Fecha y hora</th><th>Usuario</th><th>Quien opera</th><th>Rol</th><th>IP</th></tr></thead>
+        <tbody>${d.items.map((x) => `<tr>
+          <td data-label="Fecha y hora" class="nowrap">${esc(x.created_at)}</td>
+          <td data-label="Usuario">${esc(x.username)}</td>
+          <td data-label="Quien opera">${esc(x.operator || '—')}</td>
+          <td data-label="Rol">${esc(x.role)}</td>
+          <td data-label="IP">${esc(x.ip || '—')}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>` : '<div class="muted">Sin registros.</div>'}
+  </div>`;
 }
 
 async function gUsuarios() {
   const r = await api('/api/manage/users');
+  const pend = r.items.filter((u) => u.pending);
   $('#gestion-body').innerHTML = `
+  ${pend.length ? `<div class="warn" style="margin-bottom:14px">
+    <b>${pend.length} usuario(s) pendiente(s) de aprobación.</b> Un usuario de Gestión activo debe aprobarlos para que puedan ingresar.
+  </div>` : ''}
   <div class="card">
-    <div class="row-flex" style="justify-content:space-between;margin-bottom:12px">
+    <div class="row-flex" style="justify-content:space-between;margin-bottom:6px">
       <h3 style="margin:0;color:var(--primary)">Usuarios del sistema</h3>
-      <button class="btn" id="u-new">+ Nuevo usuario</button>
+      <button class="btn" id="u-new">+ Nuevo usuario de Gestión</button>
     </div>
-    <div class="table-wrap"><table class="data">
+    <div class="muted small" style="margin-bottom:12px">
+      Aquí se crean y aprueban las cuentas de <b>Gestión</b>. Las cuentas de <b>Reporte</b> se crean en el área de Reporte
+      (menú Usuarios) y aparecen aquí para que usted las apruebe.
+    </div>
+    <div class="table-wrap"><table class="data card-rows">
       <thead><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Estado</th><th>Creado</th><th></th></tr></thead>
       <tbody>${r.items.map((u) => `
         <tr>
-          <td><b>${esc(u.username)}</b></td>
-          <td>${esc(u.full_name) || '—'}</td>
-          <td>${u.role === 'gestion' ? '<span class="badge CERRADO">GESTIÓN</span>' : '<span class="badge PROCESO">REPORTE</span>'}</td>
-          <td>${u.active ? '<span class="badge CERRADO">Activo</span>' : '<span class="badge ABIERTO">Inactivo</span>'}</td>
-          <td class="nowrap small">${fmtFecha(u.created_at)}</td>
-          <td class="nowrap">
+          <td data-label="Usuario"><b>${esc(u.username)}</b></td>
+          <td data-label="Nombre">${esc(u.full_name) || '—'}</td>
+          <td data-label="Rol">${u.role === 'gestion' ? '<span class="badge CERRADO">GESTIÓN</span>' : '<span class="badge PROCESO">REPORTE</span>'}</td>
+          <td data-label="Estado">${u.pending
+            ? '<span class="badge ABIERTO">Pendiente de aprobación</span>'
+            : (u.active ? '<span class="badge CERRADO">Activo</span>' : '<span class="badge ABIERTO">Inactivo</span>')}</td>
+          <td data-label="Creado" class="nowrap small">${fmtFecha(u.created_at)}</td>
+          <td class="nowrap row-actions">
+            ${u.pending ? `<button class="btn sm success" data-approve="${u.id}">✔ Aprobar</button>` : ''}
             <button class="btn sm secondary" data-edit="${u.id}">Editar</button>
             <button class="btn sm ghost" data-reset="${u.id}">Clave</button>
+            <button class="btn sm danger" data-del="${u.id}">Eliminar</button>
           </td>
         </tr>`).join('')}</tbody>
     </table></div>
   </div>`;
   $('#u-new').onclick = () => userModal(null);
+  $$('#gestion-body [data-approve]').forEach((b) => b.onclick = async () => {
+    const u = r.items.find((x) => x.id === Number(b.dataset.approve));
+    if (!u) return;
+    if (!confirm(`¿Aprobar al usuario "${u.username}"? Podrá ingresar de inmediato.`)) return;
+    try {
+      await api('/api/manage/users/' + u.id, { method: 'PUT', body: { pending: 0 } });
+      toast('Usuario aprobado');
+      gUsuarios();
+    } catch (e) { toast(e.message, 'err'); }
+  });
   $$('#gestion-body [data-edit]').forEach((b) => b.onclick = () => userModal(r.items.find((u) => u.id === Number(b.dataset.edit))));
   $$('#gestion-body [data-reset]').forEach((b) => b.onclick = () => resetPassModal(r.items.find((u) => u.id === Number(b.dataset.reset))));
+  $$('#gestion-body [data-del]').forEach((b) => b.onclick = async () => {
+    const u = r.items.find((x) => x.id === Number(b.dataset.del));
+    if (!u) return;
+    if (!confirm(`¿Eliminar el usuario "${u.username}"? Esta acción no se puede deshacer.`)) return;
+    try {
+      await api('/api/manage/users/' + u.id, { method: 'DELETE' });
+      toast('Usuario eliminado');
+      gUsuarios();
+    } catch (e) { toast(e.message, 'err'); }
+  });
 }
 
-function userModal(u) {
+function userModal(u, ctx = 'gestion') {
+  const enReporte = ctx === 'reporte';
+  const volver = enReporte ? rUsuarios : gUsuarios;
+  const rolCampo = enReporte
+    ? '<input type="hidden" id="u-role" value="reporte" />'
+    : (u
+      ? `<select id="u-role">
+          <option value="reporte" ${u.role === 'reporte' ? 'selected' : ''}>Reporte</option>
+          <option value="gestion" ${u.role === 'gestion' ? 'selected' : ''}>Gestión</option>
+        </select>`
+      : '<select id="u-role"><option value="gestion">Gestión</option></select>');
+  const aviso = u ? '' : (enReporte
+    ? '<div class="warn" style="margin:10px 0">La cuenta quedará <b>pendiente</b>: un usuario de Gestión activo debe aprobarla para que pueda ingresar.</div>'
+    : '<div class="warn" style="margin:10px 0">Se creará <b>aprobada</b>, porque la crea un usuario de Gestión activo.</div>');
   const m = $('#modal');
   m.innerHTML = `
   <div class="modal-box">
-    <h3>${u ? 'Editar usuario' : 'Nuevo usuario'}</h3>
+    <h3>${u ? 'Editar usuario' : (enReporte ? 'Nuevo usuario de Reporte' : 'Nuevo usuario de Gestión')}</h3>
     <div class="form-grid">
       <label class="field"><span>Usuario</span><input type="text" id="u-username" value="${esc(u?.username || '')}" ${u ? 'disabled' : ''} /></label>
       <label class="field"><span>Nombre completo</span><input type="text" id="u-name" value="${esc(u?.full_name || '')}" /></label>
-      <label class="field"><span>Rol</span><select id="u-role">
-        <option value="reporte" ${u?.role === 'reporte' ? 'selected' : ''}>Reporte</option>
-        <option value="gestion" ${u?.role === 'gestion' ? 'selected' : ''}>Gestión</option>
-      </select></label>
+      <label class="field"><span>Rol</span>${rolCampo}</label>
       <label class="field"><span>Estado</span><select id="u-active" ${u ? '' : 'disabled'}>
         <option value="1" ${u?.active ? 'selected' : ''}>Activo</option>
         <option value="0" ${u && !u.active ? 'selected' : ''}>Inactivo</option>
       </select></label>
       ${!u ? `<label class="field full"><span>Contraseña inicial (mín. 6)</span><input type="text" id="u-pass" /></label>` : ''}
     </div>
+    ${aviso}
     <div class="actions">
       <button class="btn" id="u-save">Guardar</button>
       <button class="btn secondary" id="u-cancel">Cancelar</button>
@@ -944,12 +1532,15 @@ function userModal(u) {
           body: { full_name: $('#u-name').value, role: $('#u-role').value, active: $('#u-active').value === '1' },
         });
       } else {
-        await api('/api/manage/users', {
+        const r = await api('/api/manage/users', {
           method: 'POST',
           body: { username: $('#u-username').value.trim(), password: $('#u-pass').value, full_name: $('#u-name').value, role: $('#u-role').value },
         });
+        close();
+        toast(r.mensaje || 'Usuario creado');
+        return volver();
       }
-      close(); toast('Usuario guardado'); gUsuarios();
+      close(); toast('Usuario guardado'); volver();
     } catch (e) { toast(e.message, 'err'); }
   };
 }
@@ -1220,27 +1811,142 @@ function modalChangePassword() {
   };
 }
 
+/* ============ MEMORANDO (Word) ============ */
+function modalMemorando(r) {
+  const limpio = (s) => String(s ?? '').trim();
+  const asuntoAuto =
+    `Producto no conforme: ${limpio(r.tipo_hallazgo) || 'novedad'}` +
+    `${limpio(r.referencia) ? ' — Ref. ' + limpio(r.referencia) : ''}` +
+    `${limpio(r.orden_fabricacion) ? ' (OF ' + limpio(r.orden_fabricacion) + ')' : ''}`;
+  const par = (et, v) => (limpio(v) ? `${et}: ${limpio(v)}` : '');
+  const mensajeAuto = [
+    'Se notifica la siguiente novedad de producto no conforme registrada en el sistema:',
+    '',
+    par('Fecha de detección', r.fecha_deteccion),
+    par('Área que reporta', r.area_reporta),
+    par('Tipo de hallazgo', r.tipo_hallazgo),
+    par('Color de la parte con error', r.color_parte_error),
+    par('Referencia', r.referencia),
+    par('Orden de fabricación', r.orden_fabricacion),
+    par('Turno', r.turno),
+    par('Cantidad', r.cantidad),
+    par('Operario(s)', r.operario_nombre),
+    '',
+    par('Descripción', r.descripcion),
+    '',
+    par('Responsable del tratamiento', r.responsable_tratamiento),
+    par('Acción o tratamiento implementado', r.accion_tratamiento),
+    par('Verificación de eficacia', r.verificacion_eficacia),
+    par('Responsable del cierre', r.responsable_cierre),
+    par('Fecha de cierre', r.fecha_cierre),
+  ].filter((l, i, a) => !(l === '' && a[i - 1] === '')).join('\n');
+
+  const m = $('#modal');
+  m.innerHTML = `
+  <div class="modal-box" style="max-width:760px">
+    <h3>Memorando — novedad #${r.id}</h3>
+    <div class="muted small" style="margin-bottom:10px">
+      Los campos vienen cargados con la información de la novedad. Edite lo que necesite y descargue el documento.
+    </div>
+    <div class="form-grid">
+      <label class="field"><span>Nombre del empleado</span><input type="text" id="mo-nombre" value="${esc(limpio(r.operario_nombre) || USER.operator || USER.name || '')}" /></label>
+      <label class="field"><span>Fecha</span><input type="date" id="mo-fecha" value="${esc(limpio(r.fecha_cierre) || limpio(r.fecha_deteccion) || hoyISO())}" /></label>
+      <label class="field"><span>N°</span><input type="text" id="mo-numero" value="${esc(String(r.id))}" /></label>
+      <label class="field"><span>Cargo</span><input type="text" id="mo-cargo" placeholder="Ej. Operario de empaque" /></label>
+      <label class="field full"><span>Empresa</span><input type="text" id="mo-empresa" placeholder="Ej. Empresa XYZ S.A.S." /></label>
+      <label class="field full"><span>Asunto</span><input type="text" id="mo-asunto" value="${esc(asuntoAuto)}" /></label>
+      <label class="field full"><span>Mensaje</span>
+        <textarea id="mo-mensaje" rows="10" style="width:100%;min-height:200px;font:inherit">${esc(mensajeAuto)}</textarea>
+      </label>
+    </div>
+    <div class="actions">
+      <button class="btn" id="mo-descargar" type="button">⬇ Descargar Word</button>
+      <button class="btn secondary" id="mo-cancel" type="button">Cancelar</button>
+    </div>
+  </div>`;
+  const close = () => (m.innerHTML = '');
+  $('#mo-cancel').onclick = close;
+  m.onclick = (e) => { if (e.target === m) close(); };
+  $('#mo-descargar').onclick = async () => {
+    const btn = $('#mo-descargar');
+    btn.disabled = true;
+    try {
+      const blob = await api('/api/reports/' + r.id + '/memorando', {
+        method: 'POST',
+        body: {
+          nombre: $('#mo-nombre').value,
+          fecha: $('#mo-fecha').value,
+          numero: $('#mo-numero').value,
+          cargo: $('#mo-cargo').value,
+          empresa: $('#mo-empresa').value,
+          asunto: $('#mo-asunto').value,
+          mensaje: $('#mo-mensaje').value,
+        },
+        raw: true,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Memorando-${r.id}${limpio(r.referencia) ? '-' + limpio(r.referencia).replace(/[^\w-]+/g, '') : ''}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      toast('Memorando descargado');
+    } catch (e) { toast(e.message, 'err'); }
+    btn.disabled = false;
+  };
+}
+
 /* ============ ROUTER ============ */
 async function route() {
   const hash = location.hash || '#/';
   const path = hash.slice(2).split('?')[0];
-  if (path === 'login') { charts.forEach((c) => c.destroy()); charts = []; return renderLogin(); }
 
-  if (!USER) {
+  if (path === '') {
+    charts.forEach((c) => c.destroy()); charts = [];
+    return renderHome();
+  }
+
+  const want = path === 'pqr' ? 'pqr' : 'nc';
+  if (MODULE !== want) {
+    MODULE = want; USER = null; META = null;
+  }
+  if (!TOKEN) loadToken();
+
+  if (!USER && TOKEN) {
     try {
       const me = await api('/api/auth/me');
       USER = me.user;
-      META = await api('/api/reports/meta');
+      if (MODULE === 'nc') META = await api('/api/reports/meta');
     } catch {
-      return renderLogin();
+      setToken(''); USER = null;
     }
   }
-  if (!hash || hash === '#/' || path === 'dashboard') return renderDashboard();
+
+  if (path === 'login') {
+    charts.forEach((c) => c.destroy()); charts = [];
+    if (USER && USER.app === 'nc') { location.hash = '#/dashboard'; return; }
+    return renderLogin({ app: 'nc' });
+  }
+  if (path === 'pqr') {
+    charts.forEach((c) => c.destroy()); charts = [];
+    if (USER && USER.app === 'pqr') return renderPqrApp();
+    return renderLogin({ app: 'pqr' });
+  }
+  if (!USER) return renderLogin({ app: 'nc' });
+  if (USER.app !== 'nc') { location.hash = '#/pqr'; return; }
+
+  if (path === 'dashboard' || path === '') return renderDashboard();
   if (path === 'novedades') return renderList();
   if (path === 'novedades/nueva') return renderForm(null);
   let m;
   if ((m = path.match(/^novedades\/(\d+)\/editar$/))) return renderForm(m[1]);
   if ((m = path.match(/^novedades\/(\d+)$/))) return renderDetail(m[1]);
+  if (path === 'usuarios') {
+    if (USER.role === 'gestion') { location.hash = '#/gestion/usuarios'; return; }
+    return renderUsuarios();
+  }
   if (path.startsWith('gestion')) {
     if (USER.role !== 'gestion') { location.hash = '#/novedades'; return; }
     return renderGestion(path.split('/')[1] || 'usuarios');

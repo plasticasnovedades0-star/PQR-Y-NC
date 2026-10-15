@@ -34,6 +34,10 @@ npm start
 
 Los datos quedan en la carpeta `data/` (base SQLite `app.db` + carpeta `uploads/` con las fotos).
 
+> **Novedades precargadas:** la carpeta `seed/` incluye las 45 novedades históricas con sus
+> 54 fotos. En una instalación nueva (base vacía) se cargan solas al arrancar; para forzarlo:
+> `npm run seed`.
+
 **Acceso desde otros dispositivos de la red:** `http://<IP-de-este-PC>:3000`
 (ej. `http://192.168.2.41:3000`). Requiere la regla de firewall "Gestion NC (TCP 3000)"
 y que la red esté en perfil Privado (ya configuradas en esta máquina).

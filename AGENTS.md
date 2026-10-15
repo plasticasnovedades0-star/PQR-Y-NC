@@ -43,6 +43,19 @@ npm start
 # (en desarrollo: npm run dev — reinicia solo al guardar)
 ```
 
+**Novedades ya registradas**: el repositorio incluye la carpeta `seed/`
+(`novedades.json` + `fotos.zip`) con las novedades del histórico. En una instalación
+**nueva** (base de datos vacía) se cargan **automáticamente al arrancar**. Para
+recargarlas a mano:
+
+```bash
+npm run seed
+```
+
+Esto inserta las novedades (sin duplicar), registra sus fotos en la BD y extrae las
+imágenes a `data/uploads/<id>/`. Si la BD ya tiene novedades, `npm run seed` solo
+agrega las que falten.
+
 Verificar que funciona:
 
 1. `http://localhost:3000/api/health` debe responder `{"ok":true,...}`.
@@ -129,6 +142,10 @@ public/app.js             Toda la interfaz SPA (login, listado, detalle, indicad
                           gestión, usuarios, memorando)
 public/styles.css         Estilos (incluye responsive móvil con .card-rows)
 public/index.html         Shell de la app + plantillas
+scripts/load-seed.js      Carga seed/novedades.json + seed/fotos.zip (npm run seed);
+                          server.js la ejecuta solo si la BD está vacía
+seed/novedades.json       45 novedades + metadatos de 54 fotos (para precargar)
+seed/fotos.zip            54 fotos organizadas en subcarpetas <report_id>/
 Base memorando.docx       PLANTILLA del memorando — NO borrar ni renombrar
 GestionNC.exe             Lanzador opcional de Windows (inicia server.js + navegador)
 ```
@@ -146,6 +163,8 @@ GestionNC.exe             Lanzador opcional de Windows (inicia server.js + naveg
 - [ ] `npm install` sin errores.
 - [ ] `node --check server.js` y `node --check` de cualquier archivo modificado.
 - [ ] `GET http://localhost:3000/api/health` → `{"ok":true}`.
+- [ ] **Novedades precargadas**: en instalación nueva, el listado debe mostrar las 45
+      novedades con sus fotos (si está vacía, ejecutar `npm run seed` y revisar el log).
 - [ ] Login con `gestion/Gestion2026` y con `reporte/Reporte2026` → OK.
 - [ ] Crear una novedad de prueba con ≥3 fotos → aparece en el listado.
 - [ ] Descargar el memorando Word desde el detalle → se abre en Word.

@@ -7,6 +7,8 @@ const { router: reportsRouter } = require('./src/routes/reports');
 const { router: manageRouter } = require('./src/routes/manage');
 const { router: indicatorsRouter } = require('./src/routes/indicators');
 const { router: exportRouter } = require('./src/routes/export');
+const { db } = require('./src/db');
+const { loadSeed } = require('./scripts/load-seed');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -47,6 +49,8 @@ app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
   res.status(500).json({ error: 'Error interno del servidor' });
 });
+
+loadSeed(true).catch((e) => console.error('[seed] error cargando novedades iniciales:', e.message));
 
 app.listen(PORT, () => {
   console.log(`[nc] Servidor de Gestión NC escuchando en http://localhost:${PORT}`);

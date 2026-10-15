@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "seed": "node scripts/load-seed.js",
     "import-csv": "node scripts/import-csv.js",
     "import-photos": "node scripts/import-photos.js"
   },

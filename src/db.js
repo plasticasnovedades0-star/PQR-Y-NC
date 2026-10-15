@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS photos (
   filename TEXT NOT NULL,
   original_name TEXT NOT NULL DEFAULT '',
   sort_order INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  tipo TEXT NOT NULL DEFAULT 'EVIDENCIA'
 );
 
 CREATE TABLE IF NOT EXISTS operators (
